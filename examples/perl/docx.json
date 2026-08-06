@@ -1,0 +1,8 @@
+{
+  "version": "0.1",
+  "global_invariants": {
+    "docenv": { "runtime": "perl>=5.36" },
+    "docslim": { "max_lines": 15, "max_nested_depth": 3, "max_complexity": 6 }
+  },
+  "directory_overrides": {}
+}

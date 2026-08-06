@@ -1,0 +1,3 @@
+/* @docarch: component = "Theme" */
+@import url("https://fonts.googleapis.com/css2?family=Inter");
+body { background: url("/img/bg.png"); }

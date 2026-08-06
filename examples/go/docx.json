@@ -1,0 +1,1 @@
+{ "version": "0.1", "global_invariants": { "docslim": { "max_lines": 20, "max_nested_depth": 3, "max_complexity": 6 } }, "directory_overrides": {} }

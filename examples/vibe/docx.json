@@ -1,0 +1,9 @@
+{
+  "version": "0.1",
+  "profile": "vibe",
+  "global_invariants": {
+    "docslim": { "max_lines": 10, "max_nested_depth": 3, "max_complexity": 8 },
+    "docdeps": { "allowed_imports": [] }
+  },
+  "directory_overrides": {}
+}

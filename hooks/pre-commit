@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# DocX pre-commit gate. Install with:  ln -s ../../hooks/pre-commit .git/hooks/pre-commit
+# Runs the validator on staged source files; blocks the commit on any violation.
+set -euo pipefail
+
+# Supported extensions (extend as you add adapters).
+EXTS='py|js|mjs|cjs|jsx|ts|tsx|go|rs|rb|php|pl|pm'
+
+mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM | grep -E "\.(${EXTS})$" || true)
+if [ ${#files[@]} -eq 0 ]; then
+  exit 0
+fi
+
+# Resolve docx-pi: prefer local install, then PATH.
+if [ -x "node_modules/.bin/docx-pi" ]; then
+  DOCX="node_modules/.bin/docx-pi"
+elif command -v docx-pi >/dev/null 2>&1; then
+  DOCX="docx-pi"
+else
+  echo "docx-pi not found (npm install docx-pi, or pi install docx-pi). Skipping DocX gate." >&2
+  exit 0
+fi
+
+echo "DocX: validating ${#files[@]} staged file(s)..."
+if ! "$DOCX" "${files[@]}"; then
+  echo "DocX gate failed — fix the violations above or amend the tags with approval." >&2
+  exit 1
+fi

@@ -1,0 +1,62 @@
+// ============================================================================
+// docx.vibe.jsonc  —  copy this to your repo root as `docx.json`.
+// This is JSONC: comments and trailing commas are allowed (the loader strips
+// them). It's meant to be read top-to-bottom as a mini course in what DocX does.
+//
+// The "vibe" profile enforces ONLY the Core, machine-checkable tokens. Everything
+// prose (docarch, docrisk, ...) is documentation/learning, never a blocker.
+// ============================================================================
+{
+  "version": "0.1",
+
+  // "vibe" => Core-only, and docslim caps are read ONLY from this file (a
+  // per-function @docslim is ignored, so the AI can't grant itself a bigger
+  // budget). Remove this line to get the strict "default" profile.
+  "profile": "vibe",
+
+  // ---- global_invariants: defaults every file inherits -----------------------
+  "global_invariants": {
+
+    // docslim = anti-bloat budget. The single most useful guardrail: it stops
+    // functions from sprawling. Tune these to taste; start loose, tighten later.
+    "docslim": {
+      "max_lines": 40,          // body lines per function (excl. blanks/comments)
+      "max_nested_depth": 3,    // how deeply if/for/while may nest
+      "max_complexity": 8       // rough branch count (if/for/while/case/catch...)
+    },
+
+    // docdeps = import allow-list. Stops the AI quietly adding libraries to your
+    // clean stack. Empty [] = OFF (nothing checked). Fill it with the libs you
+    // actually use + stdlib, e.g. for a PocketBase JS project:
+    //   "allowed_imports": ["pocketbase", "node:crypto"]
+    "docdeps": { "allowed_imports": [] }
+
+    // docpure (no example needed here): if a function is tagged
+    //   // @docpure: deterministic = true
+    // the validator rejects I/O (console.log/print/network) inside it. The AI
+    // adds this per function where it makes sense; nothing to configure globally.
+
+    // doctype (also per-file, not here): variables carry a shape prefix —
+    //   (canonical prefixes are defined in skills/docx/references/token-reference.md)
+    // (Perl uses native $ @ % instead). In typed languages the prefix must match
+    // the annotation. The AI writes these as it codes.
+  },
+
+  // ---- directory_overrides: tighten/loosen per folder ------------------------
+  // Longer (more specific) patterns win. Example: be stricter on shared logic,
+  // looser on throwaway scripts. Uncomment to use.
+  "directory_overrides": {
+    // "src/hooks/*":   { "docslim": { "max_lines": 25, "max_complexity": 5 } },
+    // "scripts/*":     { "docslim": { "max_lines": 80 } }
+  }
+
+  // ---- PROSE tokens (NOT enforced in vibe; here for reference/learning) -------
+  // These describe intent and are meant to be SOURCE for auto-generated docs
+  // (architecture / ops guides), not blockers. You'll see the AI add them inline:
+  //   // @docarch: component = "Billing", layer = "hooks"     (system map)
+  //   // @docrisk: boundary  = "public API -> db"             (threat notes)
+  //   // @doccomp: standard  = "GDPR"                         (compliance)
+  //   // @docrun:  triage    = "restart pb; check logs"       (ops runbook)
+  //   // @docchg:  deprecated_since = "v2"                    (change log)
+  // Reading these across your codebase is a fast way to learn architecture.
+}

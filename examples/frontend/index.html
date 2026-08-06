@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<!-- @docarch: component = "LoginForm", layer = "frontend", relies_on = ["AuthHook"] -->
+<!-- @docux: component = "LoginForm", wcag = "AA", layout = "centered-card" -->
+<html>
+<body>
+  <!-- Alpine.js: logic lives in attributes; DocX guards the hook it calls, not this markup -->
+  <div x-data="{ email: '', submit() { fetch('/api/login') } }">
+    <input type="email" x-model="email" aria-label="Email">
+    <button @click="submit()">Log in</button>
+  </div>
+</body>
+</html>

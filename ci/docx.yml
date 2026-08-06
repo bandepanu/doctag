@@ -1,0 +1,27 @@
+# GitHub Actions: DocX Core-tier gate. Place at .github/workflows/docx.yml
+name: DocX
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  docx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install docx-pi
+        run: npm install -g docx-pi   # or: npm ci, if vendored in the repo
+      - name: Validate changed source files
+        run: |
+          # Validate all tracked Python/Perl sources; adjust the glob as adapters grow.
+          files=$(git ls-files '*.py' '*.pl' '*.pm')
+          if [ -n "$files" ]; then
+            docx-pi --json $files | tee docx-report.json
+            docx-pi $files
+          else
+            echo "No DocX-governed source files found."
+          fi

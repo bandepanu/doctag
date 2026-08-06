@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi.dev/docx/docx.schema.json",
+  "title": "DocX root configuration ledger",
+  "description": "Root docx.json declaring global metadata invariants and per-directory overrides that source files inherit via @docref. See references/docx-spec.md section 6.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "DocX spec version this config targets.",
+      "default": "0.1"
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["default", "vibe"],
+      "description": "Enforcement profile. 'vibe' = Core-only and docslim caps come only from this file (per-function @docslim overrides are ignored). 'default' honors per-function overrides. Self-declares the profile so the CLI flag isn't needed."
+    },
+    "include": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional glob allow-list (relative to the scanned root). If set, inventory/docs only consider files matching one of these — apply DocX to your subtree, not an upstream package. Supports * and **."
+    },
+    "exclude": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional glob deny-list (relative to the scanned root), on top of the always-skipped node_modules/.git/dist/vendor."
+    },
+    "global_invariants": {
+      "type": "object",
+      "description": "System-wide defaults inherited by every file unless overridden.",
+      "additionalProperties": { "$ref": "#/$defs/tokenBlock" }
+    },
+    "directory_overrides": {
+      "type": "object",
+      "description": "Glob-keyed overrides. Keys are paths relative to the repo root and may end in a wildcard, e.g. 'src/adapters/*'. More specific (longer) matches win.",
+      "propertyNames": { "type": "string" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "$ref": "#/$defs/tokenBlock" }
+      }
+    }
+  },
+  "$defs": {
+    "tokenBlock": {
+      "description": "A DocX token's inherited key/value payload. Keys mirror the token's inline attributes.",
+      "type": "object",
+      "properties": {
+        "allowed_imports": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "docdeps whitelist inherited by files under scope."
+        },
+        "max_lines": { "type": "integer", "minimum": 1 },
+        "max_nested_depth": { "type": "integer", "minimum": 0 },
+        "max_complexity": { "type": "integer", "minimum": 1 },
+        "deterministic": { "type": "boolean" },
+        "mutates_state": { "type": "boolean" },
+        "standard": { "type": "string" },
+        "section": { "type": "string" },
+        "platform": { "type": "string" },
+        "runtime": { "type": "string" },
+        "memory_limit_mb": { "type": "integer", "minimum": 1 },
+        "trust_boundary": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

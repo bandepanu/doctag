@@ -1,0 +1,10 @@
+{
+  "version": "0.1",
+  "global_invariants": {
+    "doccomp": { "standard": "PCI-DSS v4.0", "section": "3.2.2" },
+    "docenv": { "platform": "linux/amd64", "runtime": "python>=3.11" },
+    "docdeps": { "allowed_imports": ["math", "sys", "json"] },
+    "docslim": { "max_lines": 20, "max_nested_depth": 3, "max_complexity": 6 }
+  },
+  "directory_overrides": {}
+}
