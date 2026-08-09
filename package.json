@@ -32,7 +32,9 @@
     "test": "node dist/cli.js examples/python/ledger_router.py && node dist/cli.js examples/python/bad_example.py; test $? -eq 1"
   },
   "dependencies": {
+    "@types/node": "^26.1.2",
     "tree-sitter-wasms": "^0.1.13",
+    "typescript": "^5.9.3",
     "web-tree-sitter": "0.25.0"
   },
   "peerDependencies": {
@@ -56,9 +58,5 @@
     "ci",
     "scripts",
     "README.md"
-  ],
-  "devDependencies": {
-    "@types/node": "^26.1.2",
-    "typescript": "^5.9.3"
-  }
+  ]
 }
