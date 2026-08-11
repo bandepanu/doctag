@@ -1,7 +1,7 @@
 // Language-agnostic docx.json cascade: find the nearest config, resolve
 // global_invariants + directory_overrides for a file, and validate @docref.
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 export interface DocxConfig {
   version?: string;
@@ -13,33 +13,42 @@ export interface DocxConfig {
  *  can be richly commented for learning (JSONC) yet still parse. */
 export function stripJsonComments(s: string): string {
   let out = "";
-  let i = 0;
+  let s_i = 0;
   const n = s.length;
   let inStr = false;
   let strCh = "";
-  while (i < n) {
-    const c = s[i];
-    const d = s[i + 1];
+  while (s_i < n) {
+    const c = s[s_i];
+    const d = s[s_i + 1];
     if (inStr) {
       out += c;
-      if (c === "\\") { out += s[i + 1] ?? ""; i += 2; continue; }
+      if (c === "\\") { out += (s[s_i + 1] ?? ""); s_i += 2; continue; }
       if (c === strCh) inStr = false;
-      i++;
+      s_i++;
       continue;
     }
-    if (c === '"' || c === "'") { inStr = true; strCh = c; out += c; i++; continue; }
-    if (c === "/" && d === "/") { while (i < n && s[i] !== "\n") i++; continue; }
-    if (c === "/" && d === "*") { i += 2; while (i < n && !(s[i] === "*" && s[i + 1] === "/")) i++; i += 2; continue; }
+    if (c === '"' || c === "'") { inStr = true; strCh = c; out += c; s_i++; continue; }
+    if (c === "/" && d === "/") { s_i = f_SkipLine(s, s_i); continue; }
+    if (c === "/" && d === "*") { s_i = f_SkipBlock(s, s_i); continue; }
     out += c;
-    i++;
+    s_i++;
   }
   return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
+function f_SkipLine(s: string, s_i: number): number {
+  while (s_i < s.length && s[s_i] !== "\n") s_i++;
+  return s_i;
+}
+
+function f_SkipBlock(s: string, s_i: number): number {
+  s_i += 2;
+  while (s_i < s.length && !(s[s_i] === "*" && s[s_i + 1] === "/")) s_i++;
+  return s_i + 2;
+}
+
 export function loadConfig(path: string): DocxConfig {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const fsMod = require("fs");
-  return JSON.parse(stripJsonComments(fsMod.readFileSync(path, "utf8")));
+  return JSON.parse(stripJsonComments(fs.readFileSync(path, "utf8")));
 }
 
 export function findConfig(startFile: string, explicit?: string): string | null {
@@ -54,7 +63,7 @@ export function findConfig(startFile: string, explicit?: string): string | null 
   }
 }
 
-function globToRe(pat: string): RegExp {
+function f_GlobToRe(pat: string): RegExp {
   const esc = pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${esc}$`);
 }
@@ -67,8 +76,8 @@ export function resolveInherited(config: DocxConfig, relPath: string): Record<st
   }
   const overrides = config.directory_overrides || {};
   for (const pat of Object.keys(overrides).sort((a, b) => a.length - b.length)) {
-    const re = globToRe(pat);
-    const reStar = globToRe(pat.replace(/\*+$/, "") + "*");
+    const re = f_GlobToRe(pat);
+    const reStar = f_GlobToRe(pat.replace(/\*+$/, "") + "*");
     if (re.test(relPath) || reStar.test(relPath)) {
       for (const [tok, block] of Object.entries(overrides[pat])) {
         merged[tok] = { ...(merged[tok] || {}), ...block };

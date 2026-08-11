@@ -1,5 +1,12 @@
 import { LanguageAdapter, Param } from "../core/types";
 
+function f_ParamId(o_c: any): any {
+  if (o_c.type === "identifier") return o_c;
+  if (o_c.type === "assignment_pattern") return o_c.childForFieldName("left") || o_c.namedChildren[0];
+  if (o_c.type === "rest_pattern") return o_c.namedChildren.find((o_x: any) => o_x.type === "identifier");
+  return null;
+}
+
 // JavaScript: dynamically typed, so doctype is prefix-PRESENCE only (no annotation
 // to reconcile). A good contrast to Go. Node types verified against tree-sitter-javascript.
 export const javascript: LanguageAdapter = {
@@ -28,16 +35,14 @@ export const javascript: LanguageAdapter = {
 
   params(node: any): Param[] {
     const ps: Param[] = [];
-    const push = (id: any) => { if (id && id.type === "identifier") ps.push({ name: id.text, line: id.startPosition.row + 1 }); };
     let pl = node.childForFieldName("parameters") || node.namedChildren.find((c: any) => c.type === "formal_parameters");
     if (!pl) {
-      if (node.type === "arrow_function") push(node.namedChildren.find((c: any) => c.type === "identifier"));
+      if (node.type === "arrow_function") { const id = node.namedChildren.find((c: any) => c.type === "identifier"); if (id) ps.push({ name: id.text, line: id.startPosition.row + 1 }); }
       return ps;
     }
     for (const c of pl.namedChildren) {
-      if (c.type === "identifier") push(c);
-      else if (c.type === "assignment_pattern") push(c.childForFieldName("left") || c.namedChildren[0]);
-      else if (c.type === "rest_pattern") push(c.namedChildren.find((x: any) => x.type === "identifier"));
+      const id = f_ParamId(c);
+      if (id) ps.push({ name: id.text, line: id.startPosition.row + 1 });
     }
     return ps;
   },
@@ -50,10 +55,10 @@ export const javascript: LanguageAdapter = {
       seen.add(nm.text);
       ps.push({ name: nm.text, line: nm.startPosition.row + 1 });
     };
-    (function walk(n: any) {
+    (function f_Walk(n: any) {
       if (n.type === "variable_declarator") add(n.childForFieldName("name") || n.namedChildren[0]);
       else if (n.type === "for_in_statement") add(n.childForFieldName("left") || n.namedChildren[0]);
-      for (const c of n.namedChildren) walk(c);
+      for (const c of n.namedChildren) f_Walk(c);
     })(node);
     return ps;
   },

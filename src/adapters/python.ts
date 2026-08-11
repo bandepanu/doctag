@@ -7,6 +7,31 @@ const ANN_TO_PREFIX: Record<string, string> = {
   match: "m_", callable: "f_",
 };
 
+function f_PyParam(o_c: any): { nameNode: any; annNode: any } | null {
+  if (o_c.type === "identifier") return { nameNode: o_c, annNode: null };
+  if (o_c.type === "typed_parameter") {
+    return { nameNode: o_c.namedChildren.find((x: any) => x.type === "identifier"), annNode: o_c.childForFieldName("type") };
+  }
+  if (o_c.type === "default_parameter") {
+    return { nameNode: o_c.childForFieldName("name"), annNode: null };
+  }
+  if (o_c.type === "typed_default_parameter") {
+    return { nameNode: o_c.childForFieldName("name"), annNode: o_c.childForFieldName("type") };
+  }
+  if (o_c.type === "list_splat_pattern" || o_c.type === "dictionary_splat_pattern") {
+    return { nameNode: o_c.namedChildren.find((x: any) => x.type === "identifier"), annNode: null };
+  }
+  return { nameNode: null, annNode: null };
+}
+
+function f_ImportName(o_c: any, a_names: string[]): void {
+  if (o_c.type === "dotted_name") { a_names.push(o_c.text); return; }
+  if (o_c.type === "aliased_import") {
+    const dn = o_c.childForFieldName("name");
+    if (dn) a_names.push(dn.text);
+  }
+}
+
 export const python: LanguageAdapter = {
   id: "python",
   extensions: [".py"],
@@ -36,25 +61,12 @@ export const python: LanguageAdapter = {
     const pl = node.childForFieldName("parameters");
     if (!pl) return ps;
     for (const c of pl.namedChildren) {
-      let nameNode: any = null;
-      let annNode: any = null;
-      if (c.type === "identifier") nameNode = c;
-      else if (c.type === "typed_parameter") {
-        nameNode = c.namedChildren.find((x: any) => x.type === "identifier");
-        annNode = c.childForFieldName("type");
-      } else if (c.type === "default_parameter") {
-        nameNode = c.childForFieldName("name");
-      } else if (c.type === "typed_default_parameter") {
-        nameNode = c.childForFieldName("name");
-        annNode = c.childForFieldName("type");
-      } else if (c.type === "list_splat_pattern" || c.type === "dictionary_splat_pattern") {
-        nameNode = c.namedChildren.find((x: any) => x.type === "identifier");
-      }
-      if (nameNode) {
+      const r = f_PyParam(c);
+      if (r && r.nameNode) {
         ps.push({
-          name: nameNode.text,
-          annotation: annNode ? annNode.text : undefined,
-          line: nameNode.startPosition.row + 1,
+          name: r.nameNode.text,
+          annotation: r.annNode ? r.annNode.text : undefined,
+          line: r.nameNode.startPosition.row + 1,
         });
       }
     }
@@ -69,10 +81,10 @@ export const python: LanguageAdapter = {
       seen.add(nm.text);
       ps.push({ name: nm.text, annotation: ann ? ann.text : undefined, line: nm.startPosition.row + 1 });
     };
-    (function walk(n: any) {
+    (function f_Walk(n: any) {
       if (n.type === "assignment" || n.type === "augmented_assignment") add(n.childForFieldName("left") || n.namedChildren[0], n.childForFieldName("type"));
       else if (n.type === "for_statement") add(n.childForFieldName("left") || n.namedChildren[0]);
-      for (const c of n.namedChildren) walk(c);
+      for (const c of n.namedChildren) f_Walk(c);
     })(node);
     return ps;
   },
@@ -80,13 +92,7 @@ export const python: LanguageAdapter = {
   importModules(node: any): string[] {
     if (node.type === "import_statement") {
       const names: string[] = [];
-      for (const c of node.namedChildren) {
-        if (c.type === "dotted_name") names.push(c.text);
-        else if (c.type === "aliased_import") {
-          const dn = c.childForFieldName("name");
-          if (dn) names.push(dn.text);
-        }
-      }
+      for (const c of node.namedChildren) f_ImportName(c, names);
       return names;
     }
     if (node.type === "import_from_statement") {

@@ -18,7 +18,7 @@ const OP_NODES = new Set(["binary_operator", "comparison_operator", "boolean_ope
 export interface Mutant { line: number; original: string; mutant: string; survived: boolean }
 
 let PY: string | null = null;
-function pyCmd(): string {
+function f_PyCmd(): string {
   if (PY) return PY;
   for (const c of ["python3", "python", "py"]) {
     try { execSync(`${c} --version`, { stdio: "pipe" }); PY = c; return c; } catch { /* try next */ }
@@ -27,12 +27,12 @@ function pyCmd(): string {
   return PY; // fall back; the error will surface clearly
 }
 
-function runDoctest(source: string): boolean {
+function f_RunDoctest(source: string): boolean {
   // returns true if doctests PASS (exit 0)
   const tmp = path.join(os.tmpdir(), `docx_mut_${Date.now()}_${Math.random().toString(36).slice(2)}.py`);
   fs.writeFileSync(tmp, source);
   try {
-    execSync(`${pyCmd()} -m doctest ${tmp}`, { stdio: "pipe" });
+    execSync(`${f_PyCmd()} -m doctest ${tmp}`, { stdio: "pipe" });
     return true;
   } catch {
     return false;
@@ -41,14 +41,9 @@ function runDoctest(source: string): boolean {
   }
 }
 
-export async function mutate(file: string): Promise<{ file: string; status: string; mutants: Mutant[] }> {
-  const src = fs.readFileSync(file, "utf8");
-  if (!/>>>/.test(src)) return { file, status: "no-doctests", mutants: [] };
-  if (!runDoctest(src)) return { file, status: "baseline-failing", mutants: [] };
-
-  const tree = (await getParser(python)).parse(src);
+function f_CollectOps(tree: any): { start: number; end: number; op: string; line: number }[] {
   const ops: { start: number; end: number; op: string; line: number }[] = [];
-  (function walk(n: any) {
+  (function f_Walk(n: any) {
     if (OP_NODES.has(n.type)) {
       for (const c of n.children) {
         if (!c.isNamed && MUT[c.type] !== undefined) {
@@ -56,13 +51,23 @@ export async function mutate(file: string): Promise<{ file: string; status: stri
         }
       }
     }
-    for (const c of n.namedChildren) walk(c);
-  })(tree.rootNode);
+    for (const c of n.namedChildren) f_Walk(c);
+  })(tree);
+  return ops;
+}
+
+export async function mutate(file: string): Promise<{ file: string; status: string; mutants: Mutant[] }> {
+  const src = fs.readFileSync(file, "utf8");
+  if (!/>>>/.test(src)) return { file, status: "no-doctests", mutants: [] };
+  if (!f_RunDoctest(src)) return { file, status: "baseline-failing", mutants: [] };
+
+  const tree = (await getParser(python)).parse(src);
+  const ops = f_CollectOps(tree.rootNode);
 
   const mutants: Mutant[] = [];
   for (const o of ops.slice(0, 60)) {
     const mutSrc = src.slice(0, o.start) + MUT[o.op] + src.slice(o.end);
-    const survived = runDoctest(mutSrc); // still passes => test didn't catch the change
+    const survived = f_RunDoctest(mutSrc); // still passes => test didn't catch the change
     if (survived) mutants.push({ line: o.line, original: o.op, mutant: MUT[o.op], survived });
   }
   return {

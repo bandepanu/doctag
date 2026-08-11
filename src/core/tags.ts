@@ -19,36 +19,45 @@ export function parseTags(lines: string[], commentMarker: string): Tag[] {
 }
 
 /** Best-effort parse of `key = value, key = [..]` into JS values. Depth/quote aware. */
-export function parseKv(raw: string): Record<string, any> {
-  const d: Record<string, any> = {};
-  let i = 0;
-  const n = raw.length;
-  while (i < n) {
-    const eq = raw.indexOf("=", i);
-    if (eq === -1) break;
-    const key = raw.slice(i, eq).trim();
-    let j = eq + 1;
-    let depth = 0;
-    let instr: string | null = null;
-    while (j < n) {
-      const c = raw[j];
-      if (instr) {
-        if (c === instr) instr = null;
-      } else if (c === '"' || c === "'") {
-        instr = c;
-      } else if ("[{(".includes(c)) depth++;
-      else if ("]})".includes(c)) depth--;
-      else if (c === "," && depth === 0) break;
-      j++;
-    }
-    const val = raw.slice(eq + 1, j).trim();
-    d[key] = coerce(val);
-    i = j + 1;
+export function parseKv(s_raw: string): Record<string, any> {
+  const d_kv: Record<string, any> = {};
+  let s_i = 0;
+  const s_n = s_raw.length;
+  while (s_i < s_n) {
+    const s_eq = s_raw.indexOf("=", s_i);
+    if (s_eq === -1) break;
+    const s_key = s_raw.slice(s_i, s_eq).trim();
+    const s_j = f_ScanKvVal(s_raw, s_eq + 1);
+    const s_val = s_raw.slice(s_eq + 1, s_j).trim();
+    d_kv[s_key] = f_Coerce(s_val);
+    s_i = s_j + 1;
   }
-  return d;
+  return d_kv;
 }
 
-function coerce(val: string): any {
+/** Scan one value to its end index — quote- and bracket-depth-aware. */
+function f_ScanKvVal(s_raw: string, s_i: number): number {
+  let s_j = s_i;
+  let s_depth = 0;
+  let s_instr: string | null = null;
+  const s_n = s_raw.length;
+  while (s_j < s_n) {
+    const s_c = s_raw[s_j];
+    if (s_instr) {
+      if (s_c === s_instr) s_instr = null;
+      s_j++;
+      continue;
+    }
+    if (s_c === '"' || s_c === "'") { s_instr = s_c; s_j++; continue; }
+    if ("[{(".includes(s_c)) { s_depth++; s_j++; continue; }
+    if ("]})".includes(s_c)) { s_depth--; s_j++; continue; }
+    if (s_c === "," && s_depth === 0) return s_j;
+    s_j++;
+  }
+  return s_j;
+}
+
+function f_Coerce(val: string): any {
   try {
     return JSON.parse(val);
   } catch {

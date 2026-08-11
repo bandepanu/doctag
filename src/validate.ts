@@ -1,7 +1,7 @@
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Finding, FileReport, LanguageAdapter } from "./core/types";
-import { parseTags, parseKv } from "./core/tags";
+import { parseTags, parseKv, Tag } from "./core/tags";
 import { findConfig, resolveInherited, docrefValid, loadConfig, DocxConfig } from "./core/cascade";
 import { adapterForFile } from "./adapters";
 import { checkHtml } from "./html";
@@ -14,8 +14,8 @@ import {
 const PREFIX_RE = /^[sabdmfop]_/;  // s_ b_ a_ d_ m_ f_ o_ p_
 const SIGIL_RE = /^[$@%]/;
 
-function allowed(mod: string, whitelist: string[]): boolean {
-  return whitelist.some((w) => mod === w || mod.startsWith(w + "."));
+function f_Allowed(s_m: string, a_wl: string[]): boolean {
+  return a_wl.some((s_e) => s_m === s_e || s_m.startsWith(s_e + "."));
 }
 
 export interface ValidateOptions {
@@ -25,182 +25,228 @@ export interface ValidateOptions {
   profile?: "default" | "vibe";
 }
 
-export async function validateFile(file: string, explicitConfig?: string, opts: ValidateOptions = {}): Promise<FileReport> {
-  let vibe = opts.profile === "vibe";
-  const findings: Finding[] = [];
-  const src = fs.readFileSync(file, "utf8");
-  const lines = src.split(/\r?\n/);
+// --- HTML/CSS: no functions to police, so docdeps guards external assets ---
+function f_ValidateWeb(s_file: string, s_src: string, a_lines: string[], s_ext: string, s_explicit?: string): FileReport {
+  const s_cfgPath = findConfig(s_file, s_explicit);
+  const a_wl: string[] = [];
+  let s_cfgStr: string | null = null;
+  if (s_cfgPath && fs.existsSync(s_cfgPath)) {
+    const d_config = loadConfig(s_cfgPath);
+    let s_rel = path.resolve(s_file);
+    try { s_rel = path.relative(path.dirname(path.resolve(s_cfgPath)), s_rel).split(path.sep).join("/"); } catch { s_rel = path.basename(s_file); }
+    a_wl.push(...(((resolveInherited(d_config, s_rel).docdeps || {}).allowed_imports as string[]) || []));
+    s_cfgStr = s_cfgPath;
+  }
+  for (const s_ln of a_lines) {
+    const m_hit = s_ln.match(/@docdeps\s*:\s*(.*?)(?:-->|\*\/)?\s*$/);
+    if (m_hit) { const d_kv = parseKv(m_hit[1]); if (Array.isArray(d_kv.allowed_imports)) a_wl.push(...d_kv.allowed_imports); }
+  }
+  const a_uniq = [...new Set(a_wl)];
+  const a_hf = s_ext === ".css" ? checkCss(s_src, a_uniq) : checkHtml(s_src, a_uniq);
+  return { file: s_file, meta: { config: s_cfgStr, adapter: s_ext === ".css" ? "css" : "html", whitelist: a_uniq }, findings: a_hf, errors: a_hf.filter((o_f) => o_f.level === "error").length, warnings: a_hf.filter((o_f) => o_f.level === "warning").length };
+}
 
-  // HTML/CSS have no functions to police, but docdeps guards their external assets
-  // (scripts, stylesheets, fonts, images) and a couple of smells nudge on inline blobs.
-  const ext = path.extname(file).toLowerCase();
-  if (ext === ".html" || ext === ".htm" || ext === ".css") {
-    const cfgPath = findConfig(file, explicitConfig);
-    const wl: string[] = [];
-    let cfgStr: string | null = null;
-    if (cfgPath && fs.existsSync(cfgPath)) {
-      const config = loadConfig(cfgPath);
-      let rel = path.resolve(file);
-      try { rel = path.relative(path.dirname(path.resolve(cfgPath)), rel).split(path.sep).join("/"); } catch { rel = path.basename(file); }
-      wl.push(...(((resolveInherited(config, rel).docdeps || {}).allowed_imports as string[]) || []));
-      cfgStr = cfgPath;
+// --- @docref inheritance resolution ---
+function f_ValidateDocrefs(a_tags: Tag[], d_config: DocxConfig, a_findings: Finding[]): void {
+  for (const o_t of a_tags) {
+    if (o_t.token !== "docref") continue;
+    for (const s_key of (o_t.kv.inherit as string[]) || []) {
+      if (!docrefValid(d_config, s_key)) {
+        a_findings.push({ level: "warning", token: "docref", line: o_t.line, message: `@docref inherits '${s_key}' but no such block in docx.json` });
+      }
     }
-    const cmark = ext === ".css" ? "/*" : "<!--";
-    for (const ln of lines) {
-      const m = ln.match(/@docdeps\s*:\s*(.*?)(?:-->|\*\/)?\s*$/);
-      if (m) { const kv = parseKv(m[1]); if (Array.isArray(kv.allowed_imports)) wl.push(...kv.allowed_imports); }
+  }
+}
+
+// single import module against the whitelist
+function f_CheckMod(s_mod: string, o_imp: any, a_wl: string[], a_findings: Finding[]): void {
+  if (/^[.\/]/.test(s_mod)) return; // relative/local import — your own code
+  if (!f_Allowed(s_mod, a_wl)) {
+    a_findings.push({ level: "error", token: "docdeps", line: o_imp.startPosition.row + 1, message: `import '${s_mod}' not in docdeps whitelist [${[...new Set(a_wl)].sort().join(", ")}]` });
+  }
+}
+
+// --- @docdeps whitelist (inherited + module-level tags) on imports ---
+function f_ValidateDocdeps(o_root: any, a_tags: Tag[], d_inherited: Record<string, Record<string, any>>, o_adapter: LanguageAdapter, a_findings: Finding[]): string[] {
+  const a_wl: string[] = [...(((d_inherited.docdeps || {}).allowed_imports as string[]) || [])];
+  for (const o_t of a_tags) if (o_t.token === "docdeps" && Array.isArray(o_t.kv.allowed_imports)) a_wl.push(...o_t.kv.allowed_imports);
+  if (a_wl.length) {
+    for (const o_imp of collectImports(o_root, o_adapter.nodeTypes.import)) {
+      for (const s_mod of o_adapter.importModules(o_imp)) {
+        f_CheckMod(s_mod, o_imp, a_wl, a_findings);
+      }
     }
-    void cmark;
-    const uniq = [...new Set(wl)];
-    const hf = ext === ".css" ? checkCss(src, uniq) : checkHtml(src, uniq);
-    return { file, meta: { config: cfgStr, adapter: ext === ".css" ? "css" : "html", whitelist: uniq }, findings: hf, errors: hf.filter((f) => f.level === "error").length, warnings: hf.filter((f) => f.level === "warning").length };
+  }
+  return [...new Set(a_wl)].sort();
+}
+
+// one variable's prefix/sigil + annotation agreement
+function f_CheckDoctypeName(o_p: any, o_adapter: LanguageAdapter, a_findings: Finding[]): void {
+  if (o_adapter.doctypeMode === "sigil") {
+    if (!SIGIL_RE.test(o_p.name)) {
+      a_findings.push({ level: "error", token: "doctype", line: o_p.line, message: `variable '${o_p.name}' lacks a Perl sigil ($/@/%)` });
+    }
+    return;
+  }
+  if (o_adapter.doctypeMode !== "prefix") return;
+  if (!PREFIX_RE.test(o_p.name)) {
+    a_findings.push({ level: "error", token: "doctype", line: o_p.line, message: `name '${o_p.name}' has no structural prefix (s_/b_/a_/d_/m_/f_/o_/p_)` });
+    return;
+  }
+  if (o_p.annotation) {
+    const s_expected = o_adapter.annotationPrefix(o_p.annotation);
+    if (s_expected && s_expected !== o_p.name.slice(0, 2)) {
+      a_findings.push({ level: "error", token: "doctype", line: o_p.line, message: `'${o_p.name}' is prefixed '${o_p.name.slice(0, 2)}' but annotated '${o_p.annotation}' (expected '${s_expected}')` });
+    }
+  }
+}
+
+// --- @doctype: strict prefix/sigil + annotation agreement, deduped by name ---
+function f_ValidateDoctype(o_fn: any, o_adapter: LanguageAdapter, a_findings: Finding[]): void {
+  const a_seen = new Set<string>();
+  for (const o_p of [...o_adapter.params(o_fn), ...o_adapter.locals(o_fn)]) {
+    if (o_p.name === "self" || o_p.name === "cls" || o_p.name.startsWith("_") || a_seen.has(o_p.name)) continue;
+    a_seen.add(o_p.name);
+    f_CheckDoctypeName(o_p, o_adapter, a_findings);
+  }
+}
+
+// --- @docslim caps (cascade, or cascade + per-function header unless vibe) ---
+function f_SlimCap(a_findings: Finding[], s_name: string, s_label: string, s_suffix: string, s_capName: string, s_actual: number, s_cap: number | undefined, s_row: number): void {
+  if (typeof s_cap !== "number") return;
+  if (s_actual > s_cap) {
+    a_findings.push({ level: "error", token: "docslim", line: s_row, message: `${s_name}: ${s_label} ${s_actual}${s_suffix} > ${s_capName} ${s_cap}` });
+  }
+}
+
+function f_HeaderTag(s_token: string, a_tags: Tag[], a_lines: string[], o_adapter: LanguageAdapter, s_fnRow: number): Record<string, any> | null {
+  const o_hl = headerLines(s_fnRow, a_lines, o_adapter.commentLine);
+  let d_found: Record<string, any> | null = null;
+  for (const o_t of a_tags) if (o_t.token === s_token && o_hl.has(o_t.line)) d_found = o_t.kv;
+  return d_found;
+}
+
+function f_ValidateDocslim(o_fn: any, a_lines: string[], a_tags: Tag[], d_inherited: Record<string, Record<string, any>>, b_vibe: boolean, o_adapter: LanguageAdapter, a_findings: Finding[]): void {
+  const s_name = o_adapter.functionName(o_fn);
+  const d_local = f_HeaderTag("docslim", a_tags, a_lines, o_adapter, o_fn.startPosition.row);
+  const d_slim = b_vibe ? { ...(d_inherited.docslim || {}) } : { ...(d_inherited.docslim || {}), ...(d_local || {}) };
+  if (b_vibe && d_local && Object.keys(d_inherited.docslim || {}).length) {
+    a_findings.push({ level: "warning", token: "docslim", line: o_fn.startPosition.row + 1, message: `${s_name}: per-function @docslim ignored under vibe profile (caps come from docx.json)` });
+  }
+  const s_lines = bodyLineCount(o_adapter.bodyNode(o_fn), a_lines, o_adapter.commentLine);
+  const s_depth = nestingDepth(o_fn, o_adapter.nodeTypes.block);
+  const s_cmplx = complexity(o_fn, o_adapter.nodeTypes.branch);
+  f_SlimCap(a_findings, s_name, "body", " lines", "max_lines", s_lines, d_slim.max_lines, o_fn.startPosition.row + 1);
+  f_SlimCap(a_findings, s_name, "nesting depth", "", "max_nested_depth", s_depth, d_slim.max_nested_depth, o_fn.startPosition.row + 1);
+  f_SlimCap(a_findings, s_name, "complexity", "", "max_complexity", s_cmplx, d_slim.max_complexity, o_fn.startPosition.row + 1);
+}
+
+// one call against a pure block's I/O + network rules
+function f_CheckCall(o_call: any, o_adapter: LanguageAdapter, a_findings: Finding[]): void {
+  const s_cn = o_adapter.callName(o_call);
+  if (!s_cn) return;
+  if (o_adapter.ioNames.includes(s_cn)) {
+    a_findings.push({ level: "error", token: "docpure", line: o_call.startPosition.row + 1, message: `impure I/O call '${s_cn}(...)' in a block marked pure/deterministic` });
+  } else if (o_adapter.netNames.includes(s_cn.split(".")[0])) {
+    a_findings.push({ level: "error", token: "docpure", line: o_call.startPosition.row + 1, message: `network call via '${s_cn}' in a pure/deterministic block` });
+  }
+}
+
+// --- @docpure: no I/O or network calls in deterministic/pure blocks ---
+function f_ValidateDocpure(o_fn: any, a_tags: Tag[], a_lines: string[], o_adapter: LanguageAdapter, a_findings: Finding[]): void {
+  const d_pure = f_HeaderTag("docpure", a_tags, a_lines, o_adapter, o_fn.startPosition.row);
+  if (d_pure && (d_pure.deterministic === true || d_pure.mutates_state === false)) {
+    for (const o_call of collectCalls(o_fn, o_adapter.nodeTypes.call)) {
+      f_CheckCall(o_call, o_adapter, a_findings);
+    }
+  }
+}
+
+// collect the names a @docrule wants suppressed
+function f_CollectSuppress(a_tags: Tag[]): Set<string> {
+  const a_suppress = new Set<string>();
+  for (const o_t of a_tags) {
+    if (o_t.token !== "docrule" || !Array.isArray(o_t.kv.suppress)) continue;
+    for (const s_s of o_t.kv.suppress) a_suppress.add(String(s_s));
+  }
+  return a_suppress;
+}
+
+// --- @docrule: a documented policy exception downgrades errors to warnings ---
+function f_ApplyDocrule(a_tags: Tag[], b_vibe: boolean, a_findings: Finding[]): void {
+  const a_suppress = f_CollectSuppress(a_tags);
+  if (!a_suppress.size) return;
+  if (b_vibe) {
+    a_findings.push({ level: "warning", token: "docrule", line: 1, message: `@docrule suppression of [${[...a_suppress].join(", ")}] is IGNORED under the vibe profile (an agent cannot unlock its own cage)` });
+  } else {
+    for (const o_f of a_findings) {
+      if (o_f.level === "error" && a_suppress.has(o_f.token)) {
+        o_f.level = "warning";
+        o_f.message += " (f_Allowed by @docrule)";
+      }
+    }
+  }
+}
+
+export async function validateFile(s_file: string, s_explicit?: string, o_opts: ValidateOptions = {}): Promise<FileReport> {
+  let b_vibe = o_opts.profile === "vibe";
+  const a_findings: Finding[] = [];
+  const s_src = fs.readFileSync(s_file, "utf8");
+  const a_lines = s_src.split(/\r?\n/);
+
+  // HTML/CSS have no functions to police; route to the web-asset checker.
+  const s_ext = path.extname(s_file).toLowerCase();
+  if (s_ext === ".html" || s_ext === ".htm" || s_ext === ".css") {
+    return f_ValidateWeb(s_file, s_src, a_lines, s_ext, s_explicit);
   }
 
-  const adapter = adapterForFile(file);
-  if (!adapter) {
-    return { file, meta: { config: null, adapter: null, whitelist: [] }, findings, errors: 0, warnings: 0 };
+  const o_adapter = adapterForFile(s_file);
+  if (!o_adapter) {
+    return { file: s_file, meta: { config: null, adapter: null, whitelist: [] }, findings: a_findings, errors: 0, warnings: 0 };
   }
 
   // --- cascade ---
-  const cfgPath = findConfig(file, explicitConfig);
-  let config: DocxConfig = {};
-  let inherited: Record<string, Record<string, any>> = {};
-  if (cfgPath && fs.existsSync(cfgPath)) {
-    config = loadConfig(cfgPath);
-    let rel = path.resolve(file);
-    try {
-      rel = path.relative(path.dirname(path.resolve(cfgPath)), rel).split(path.sep).join("/");
-    } catch {
-      rel = path.basename(file);
-    }
-    inherited = resolveInherited(config, rel);
+  const s_cfgPath = findConfig(s_file, s_explicit);
+  let d_config: DocxConfig = {};
+  let d_inherited: Record<string, Record<string, any>> = {};
+  if (s_cfgPath && fs.existsSync(s_cfgPath)) {
+    d_config = loadConfig(s_cfgPath);
+    let s_rel = path.resolve(s_file);
+    try { s_rel = path.relative(path.dirname(path.resolve(s_cfgPath)), s_rel).split(path.sep).join("/"); } catch { s_rel = path.basename(s_file); }
+    d_inherited = resolveInherited(d_config, s_rel);
   }
   // A config can self-declare the profile so a vibe coder never needs the flag.
-  if (opts.profile === undefined && (config as any).profile === "vibe") vibe = true;
+  if (o_opts.profile === undefined && (d_config as any).profile === "vibe") b_vibe = true;
 
-  const tags = parseTags(lines, adapter.commentLine);
+  const a_tags = parseTags(a_lines, o_adapter.commentLine);
 
   // --- docref resolution ---
-  for (const t of tags) {
-    if (t.token === "docref") {
-      for (const key of (t.kv.inherit as string[]) || []) {
-        if (!docrefValid(config, key)) {
-          findings.push({ level: "warning", token: "docref", line: t.line, message: `@docref inherits '${key}' but no such block in docx.json` });
-        }
-      }
-    }
-  }
+  f_ValidateDocrefs(a_tags, d_config, a_findings);
 
-  const parser = await getParser(adapter);
-  const tree = parser.parse(src);
-  const root = tree.rootNode;
+  const o_parser = await getParser(o_adapter);
+  const o_tree = o_parser.parse(s_src);
+  const o_root = o_tree.rootNode;
 
-  // --- docdeps whitelist (inherited + module-level tags) ---
-  const whitelist: string[] = [...(((inherited.docdeps || {}).allowed_imports as string[]) || [])];
-  for (const t of tags) if (t.token === "docdeps" && Array.isArray(t.kv.allowed_imports)) whitelist.push(...t.kv.allowed_imports);
-  if (whitelist.length) {
-    for (const imp of collectImports(root, adapter.nodeTypes.import)) {
-      for (const mod of adapter.importModules(imp)) {
-        if (/^[.\/]/.test(mod)) continue; // relative/local import — your own code, not an external dep
-        if (!allowed(mod, whitelist)) {
-          findings.push({ level: "error", token: "docdeps", line: imp.startPosition.row + 1, message: `import '${mod}' not in docdeps whitelist [${[...new Set(whitelist)].sort().join(", ")}]` });
-        }
-      }
-    }
-  }
+  // --- docdeps ---
+  const a_wl = f_ValidateDocdeps(o_root, a_tags, d_inherited, o_adapter, a_findings);
 
   // --- per-function checks ---
-  const headerTag = (token: string, fnStartRow: number): Record<string, any> | null => {
-    const hl = headerLines(fnStartRow, lines, adapter.commentLine);
-    let found: Record<string, any> | null = null;
-    for (const t of tags) if (t.token === token && hl.has(t.line)) found = t.kv;
-    return found;
-  };
-
-  for (const fn of findFunctions(root, adapter.nodeTypes.func)) {
-    const name = adapter.functionName(fn);
-
-    // doctype: strict in every profile — a missing prefix or a prefix/annotation
-    // mismatch is an error. Checked on BOTH parameters and local declarations, so
-    // "every variable is prefixed" is actually true (deduped by name).
-    const dtSeen = new Set<string>();
-    for (const p of [...adapter.params(fn), ...adapter.locals(fn)]) {
-      if (p.name === "self" || p.name === "cls" || p.name.startsWith("_") || dtSeen.has(p.name)) continue;
-      dtSeen.add(p.name);
-      if (adapter.doctypeMode === "prefix") {
-        if (!PREFIX_RE.test(p.name)) {
-          findings.push({ level: "error", token: "doctype", line: p.line, message: `name '${p.name}' has no structural prefix (s_/b_/a_/d_/m_/f_/o_/p_)` });
-        } else if (p.annotation) {
-          const expected = adapter.annotationPrefix(p.annotation);
-          if (expected && expected !== p.name.slice(0, 2)) {
-            findings.push({ level: "error", token: "doctype", line: p.line, message: `'${p.name}' is prefixed '${p.name.slice(0, 2)}' but annotated '${p.annotation}' (expected '${expected}')` });
-          }
-        }
-      } else if (adapter.doctypeMode === "sigil") {
-        if (!SIGIL_RE.test(p.name)) {
-          findings.push({ level: "error", token: "doctype", line: p.line, message: `variable '${p.name}' lacks a Perl sigil ($/@/%)` });
-        }
-      }
-    }
-
-    // docslim caps. Default: a function's own @docslim header wins over the
-    // inherited cascade. Vibe: caps come ONLY from the cascade (docx.json), so the
-    // agent writing the code cannot relax its own budget per function.
-    const localSlim = headerTag("docslim", fn.startPosition.row);
-    const slim = vibe ? { ...(inherited.docslim || {}) } : { ...(inherited.docslim || {}), ...(localSlim || {}) };
-    if (vibe && localSlim && Object.keys(inherited.docslim || {}).length) {
-      findings.push({ level: "warning", token: "docslim", line: fn.startPosition.row + 1, message: `${name}: per-function @docslim ignored under vibe profile (caps come from docx.json)` });
-    }
-    if (Object.keys(slim).length) {
-      if (typeof slim.max_lines === "number") {
-        const n = bodyLineCount(adapter.bodyNode(fn), lines, adapter.commentLine);
-        if (n > slim.max_lines) findings.push({ level: "error", token: "docslim", line: fn.startPosition.row + 1, message: `${name}: body ${n} lines > max_lines ${slim.max_lines}` });
-      }
-      if (typeof slim.max_nested_depth === "number") {
-        const d = nestingDepth(fn, adapter.nodeTypes.block);
-        if (d > slim.max_nested_depth) findings.push({ level: "error", token: "docslim", line: fn.startPosition.row + 1, message: `${name}: nesting depth ${d} > max_nested_depth ${slim.max_nested_depth}` });
-      }
-      if (typeof slim.max_complexity === "number") {
-        const c = complexity(fn, adapter.nodeTypes.branch);
-        if (c > slim.max_complexity) findings.push({ level: "error", token: "docslim", line: fn.startPosition.row + 1, message: `${name}: complexity ${c} > max_complexity ${slim.max_complexity}` });
-      }
-    }
-
-    // docpure
-    const pure = headerTag("docpure", fn.startPosition.row);
-    if (pure && (pure.deterministic === true || pure.mutates_state === false)) {
-      for (const call of collectCalls(fn, adapter.nodeTypes.call)) {
-        const cn = adapter.callName(call);
-        if (!cn) continue;
-        if (adapter.ioNames.includes(cn)) {
-          findings.push({ level: "error", token: "docpure", line: call.startPosition.row + 1, message: `impure I/O call '${cn}(...)' in a block marked pure/deterministic` });
-        } else if (adapter.netNames.includes(cn.split(".")[0])) {
-          findings.push({ level: "error", token: "docpure", line: call.startPosition.row + 1, message: `network call via '${cn}' in a pure/deterministic block` });
-        }
-      }
-    }
+  for (const o_fn of findFunctions(o_root, o_adapter.nodeTypes.func)) {
+    f_ValidateDoctype(o_fn, o_adapter, a_findings);
+    f_ValidateDocslim(o_fn, a_lines, a_tags, d_inherited, b_vibe, o_adapter, a_findings);
+    f_ValidateDocpure(o_fn, a_tags, a_lines, o_adapter, a_findings);
   }
 
-  // docrule: a documented local policy exception downgrades a named rule's errors to
-  // warnings (visible, not silent) — e.g. `# @docrule: suppress = ["docpure"]`.
-  const suppress = new Set<string>();
-  for (const t of tags) if (t.token === "docrule" && Array.isArray(t.kv.suppress)) for (const s of t.kv.suppress) suppress.add(String(s));
-  if (suppress.size) {
-    if (vibe) {
-      // In vibe mode the agent must not be able to self-exempt — suppression is ignored.
-      findings.push({ level: "warning", token: "docrule", line: 1, message: `@docrule suppression of [${[...suppress].join(", ")}] is IGNORED under the vibe profile (an agent cannot unlock its own cage)` });
-    } else {
-      for (const f of findings) if (f.level === "error" && suppress.has(f.token)) { f.level = "warning"; f.message += " (allowed by @docrule)"; }
-    }
-  }
+  // --- docrule ---
+  f_ApplyDocrule(a_tags, b_vibe, a_findings);
 
-  const errors = findings.filter((f) => f.level === "error").length;
-  const warnings = findings.filter((f) => f.level === "warning").length;
-  return { file, meta: { config: cfgPath, adapter: adapter.id, whitelist: [...new Set(whitelist)].sort() }, findings, errors, warnings };
+  const s_errors = a_findings.filter((o_f) => o_f.level === "error").length;
+  const s_warnings = a_findings.filter((o_f) => o_f.level === "warning").length;
+  return { file: s_file, meta: { config: s_cfgPath, adapter: o_adapter.id, whitelist: a_wl }, findings: a_findings, errors: s_errors, warnings: s_warnings };
 }
 
-export async function validatePaths(paths: string[], explicitConfig?: string, opts: ValidateOptions = {}): Promise<{ reports: FileReport[]; errors: number }> {
-  const reports: FileReport[] = [];
-  for (const p of paths) reports.push(await validateFile(p, explicitConfig, opts));
-  return { reports, errors: reports.reduce((a, r) => a + r.errors, 0) };
+export async function validatePaths(a_paths: string[], s_explicit?: string, o_opts: ValidateOptions = {}): Promise<{ reports: FileReport[]; errors: number }> {
+  const a_reports: FileReport[] = [];
+  for (const s_p of a_paths) a_reports.push(await validateFile(s_p, s_explicit, o_opts));
+  return { reports: a_reports, errors: a_reports.reduce((s_sum, o_r) => s_sum + o_r.errors, 0) };
 }

@@ -8,6 +8,12 @@ const SCALAR = new Set([
   "uint64", "uintptr", "byte", "rune", "float32", "float64", "bool", "error", "complex64", "complex128",
 ]);
 
+function f_Add(a_ps: Param[], a_seen: Set<string>, o_nm: any, o_ann?: any): void {
+  if (!o_nm || o_nm.type !== "identifier" || o_nm.text === "_" || a_seen.has(o_nm.text)) return;
+  a_seen.add(o_nm.text);
+  a_ps.push({ name: o_nm.text, annotation: o_ann ? o_ann.text : undefined, line: o_nm.startPosition.row + 1 });
+}
+
 export const go: LanguageAdapter = {
   id: "go",
   extensions: [".go"],
@@ -49,29 +55,24 @@ export const go: LanguageAdapter = {
   locals(node: any): Param[] {
     const ps: Param[] = [];
     const seen = new Set<string>();
-    const add = (nm: any, ann?: any) => {
-      if (!nm || nm.type !== "identifier" || nm.text === "_" || seen.has(nm.text)) return;
-      seen.add(nm.text);
-      ps.push({ name: nm.text, annotation: ann ? ann.text : undefined, line: nm.startPosition.row + 1 });
-    };
-    (function walk(n: any) {
+    (function f_Walk(n: any) {
       if (n.type === "short_var_declaration") {
         const left = n.childForFieldName("left");
-        for (const c of left ? left.namedChildren : []) add(c);
+        for (const c of left ? left.namedChildren : []) f_Add(ps, seen, c);
       } else if (n.type === "var_spec") {
         const typeNode = n.namedChildren.find((c: any) => c.type !== "identifier");
-        for (const c of n.namedChildren.filter((c: any) => c.type === "identifier")) add(c, typeNode);
+        for (const c of n.namedChildren.filter((c: any) => c.type === "identifier")) f_Add(ps, seen, c, typeNode);
       }
-      for (const c of n.namedChildren) walk(c);
+      for (const c of n.namedChildren) f_Walk(c);
     })(node);
     return ps;
   },
 
   importModules(node: any): string[] {
     const specs: any[] = [];
-    (function collect(n: any) {
+    (function f_Collect(n: any) {
       if (n.type === "import_spec") specs.push(n);
-      for (const c of n.namedChildren) collect(c);
+      for (const c of n.namedChildren) f_Collect(c);
     })(node);
     return specs
       .map((s) => {

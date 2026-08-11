@@ -14,6 +14,22 @@ const PREFIX_RE = /^[sabdmfop]_/;
 export interface Rename { old: string; new: string; line: number; annotation?: string }
 export interface FileSuggestion { file: string; language: string; renames: Rename[] }
 
+function f_RenameForFile(adapter: any, root: any): Rename[] {
+  const renames: Rename[] = [];
+  const seen = new Set<string>();
+  for (const fn of findFunctions(root, adapter.nodeTypes.func)) {
+    for (const p of [...adapter.params(fn), ...adapter.locals(fn)]) {
+      if (p.name === "self" || p.name === "cls" || p.name.startsWith("_") || PREFIX_RE.test(p.name)) continue;
+      const prefix = (p.annotation && adapter.annotationPrefix(p.annotation)) || "s_";
+      const key = `${p.name}@${p.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      renames.push({ old: p.name, new: prefix + p.name, line: p.line, annotation: p.annotation });
+    }
+  }
+  return renames;
+}
+
 export async function suggestPrefixes(root: string): Promise<FileSuggestion[]> {
   const scope = loadScope(root);
   const result: FileSuggestion[] = [];
@@ -24,18 +40,7 @@ export async function suggestPrefixes(root: string): Promise<FileSuggestion[]> {
     const src = fs.readFileSync(file, "utf8");
     let tree: any;
     try { tree = (await getParser(adapter)).parse(src); } catch { continue; }
-    const renames: Rename[] = [];
-    const seen = new Set<string>();
-    for (const fn of findFunctions(tree.rootNode, adapter.nodeTypes.func)) {
-      for (const p of [...adapter.params(fn), ...adapter.locals(fn)]) {
-        if (p.name === "self" || p.name === "cls" || p.name.startsWith("_") || PREFIX_RE.test(p.name)) continue;
-        const prefix = (p.annotation && adapter.annotationPrefix(p.annotation)) || "s_";
-        const key = `${p.name}@${p.line}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        renames.push({ old: p.name, new: prefix + p.name, line: p.line, annotation: p.annotation });
-      }
-    }
+    const renames = f_RenameForFile(adapter, tree.rootNode);
     if (renames.length) result.push({ file: path.relative(root, file), language: adapter.id, renames });
   }
   return result;

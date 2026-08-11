@@ -19,6 +19,17 @@ Every variable and parameter name (except `self`/`cls`) begins with exactly one 
 
 `b_` splits out of `s_` because booleans drive control flow and every type system can verify them. `p_` applies only where pointers/references are a real, type-visible shape (Go/Rust/C/C++); elsewhere it's simply unused. (Two prefixes were deliberately rejected: `j_` for JSON — a JSON payload is structurally a string, so it's `s_`/`d_`, not its own shape; and `g_` for globals — scope is orthogonal to shape and unverifiable, so use `ALL_CAPS` for globals instead.)
 
+### Function (callable) names — `f_` on private helpers only
+
+How the `f_` prefix applies to **function names**, which is distinct from the variable rule above:
+
+- **Private (non-exported) helper functions: always `f_`** — e.g. `f_Normalize`, `f_LoadConfig`, `f_Walk`. This marks the function as file-internal machinery. The rule is mechanical: *no `export` keyword → `f_` prefix.*
+- **Public (exported) API functions: no prefix** — e.g. `validateFile`, `parseTags`, `buildReport`. Exported names are the library's contract; forcing `f_` on them adds noise and would ripple through every importer. The rule is mechanical: *contains `export` → plain name.*
+- **Lambda/arrow callables assigned to a variable** follow the variable rule (`f_` for a callable value, e.g. `const f_transform = (s) => ...`).
+- **Validator scope note:** the doctype checker enforces prefixes on **parameters and local variable declarations only** — it does not check a function's own name. Function-name `f_` is therefore a documented convention, not a validator error either way (a private function named without `f_` is a style violation, not a doctype finding).
+
+Rationale: the single-letter prefix on *variables* encodes data shape (what a value is); the `f_` on *private functions* encodes visibility (machinery vs API). Keeping public names unprefixed preserves natural call sites and import readability.
+
 ## Core tokens (enforced)
 
 | Tier/Phase | Token | Meaning / what it enforces | Example |

@@ -1,5 +1,30 @@
 import { LanguageAdapter, Param } from "../core/types";
 
+const NAME_T = /^(?:identifier|shorthand_property_identifier_pattern)$/;
+
+function f_TsParam(o_c: any, a_ps: Param[]): void {
+  if (o_c.type !== "required_parameter" && o_c.type !== "optional_parameter") return;
+  const ta = o_c.namedChildren.find((x: any) => x.type === "type_annotation");
+  const ann = ta && ta.namedChildren[0] ? ta.namedChildren[0].text : undefined;
+  const pattern = o_c.childForFieldName("pattern") || o_c.namedChildren.find((x: any) => x.type === "identifier");
+  if (!pattern) return;
+  // Plain identifier param — unchanged behavior (name + annotation).
+  if (pattern.type === "identifier") {
+    a_ps.push({ name: pattern.text, annotation: ann, line: pattern.startPosition.row + 1 });
+    return;
+  }
+  // Binding pattern (object/array destructuring): report every bound identifier
+  // so each is shape-prefixed. Outer annotation describes the whole pattern, not
+  // each binding, so per-binding annotation is omitted (prefix still enforced).
+  (function f_Walk(n: any): void {
+    if (NAME_T.test(n.type)) {
+      a_ps.push({ name: n.text, annotation: undefined, line: n.startPosition.row + 1 });
+    } else {
+      for (const ch of n.namedChildren) f_Walk(ch);
+    }
+  })(pattern);
+}
+
 // TypeScript: statically typed → doctype checks prefix + annotation agreement.
 const SCALAR = new Set(["string", "number", "boolean", "bigint", "symbol"]);
 
@@ -30,30 +55,7 @@ export const typescript: LanguageAdapter = {
     const ps: Param[] = [];
     const pl = node.childForFieldName("parameters") || node.namedChildren.find((c: any) => c.type === "formal_parameters");
     if (!pl) return ps;
-    for (const c of pl.namedChildren) {
-      if (c.type !== "required_parameter" && c.type !== "optional_parameter") continue;
-      const ta = c.namedChildren.find((x: any) => x.type === "type_annotation");
-      const ann = ta && ta.namedChildren[0] ? ta.namedChildren[0].text : undefined;
-      const pattern = c.childForFieldName("pattern") || c.namedChildren.find((x: any) => x.type === "identifier");
-      if (!pattern) continue;
-      // Plain identifier param — unchanged behavior (name + annotation).
-      if (pattern.type === "identifier") {
-        ps.push({ name: pattern.text, annotation: ann, line: pattern.startPosition.row + 1 });
-        continue;
-      }
-      // Binding pattern (object/array destructuring): report every bound
-      // identifier so each is shape-prefixed. The outer annotation describes the
-      // whole pattern, not each binding, so per-binding annotation is omitted
-      // (prefix-presence is still enforced).
-      const NAME_T = /^(?:identifier|shorthand_property_identifier_pattern)$/;
-      (function walk(n: any): void {
-        if (NAME_T.test(n.type)) {
-          ps.push({ name: n.text, annotation: undefined, line: n.startPosition.row + 1 });
-        } else {
-          for (const ch of n.namedChildren) walk(ch);
-        }
-      })(pattern);
-    }
+    for (const c of pl.namedChildren) f_TsParam(c, ps);
     return ps;
   },
 
@@ -65,12 +67,12 @@ export const typescript: LanguageAdapter = {
       seen.add(nm.text);
       ps.push({ name: nm.text, annotation: ann ? ann.text : undefined, line: nm.startPosition.row + 1 });
     };
-    (function walk(n: any) {
+    (function f_Walk(n: any) {
       if (n.type === "variable_declarator") {
         const ta = n.namedChildren.find((c: any) => c.type === "type_annotation");
         add(n.childForFieldName("name") || n.namedChildren[0], ta && ta.namedChildren[0] ? ta.namedChildren[0] : undefined);
       } else if (n.type === "for_in_statement") add(n.childForFieldName("left") || n.namedChildren[0]);
-      for (const c of n.namedChildren) walk(c);
+      for (const c of n.namedChildren) f_Walk(c);
     })(node);
     return ps;
   },

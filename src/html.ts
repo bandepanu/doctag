@@ -7,42 +7,52 @@
 // Relative/local URLs are always allowed (your own assets, not external deps).
 import { Finding } from "./core/types";
 
-function hostOf(url: string): string | null {
+function f_HostOf(url: string): string | null {
   const m = url.match(/^(?:https?:)?\/\/([^/]+)/i);
   return m ? m[1].toLowerCase() : null; // null => relative/local (allowed)
 }
-function allowedHost(host: string, whitelist: string[]): boolean {
+function f_AllowedHost(host: string, whitelist: string[]): boolean {
   return whitelist.some((w) => {
     const lw = String(w).toLowerCase().replace(/^(?:https?:)?\/\//, "").replace(/\/.*$/, "");
     return host === lw || host.endsWith("." + lw);
   });
 }
-const lineOfIdx = (src: string, idx: number) => src.slice(0, idx).split(/\r?\n/).length;
+const f_LineOfIdx = (src: string, idx: number) => src.slice(0, idx).split(/\r?\n/).length;
+
+function f_ScanAttr(src: string, whitelist: string[], ln: (i: number) => number, findings: Finding[]): void {
+  const attrRe = /<(?:script|link|img|source)\b[^>]*?\b(?:src|href)\s*=\s*["']([^"']+)["'][^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = attrRe.exec(src))) {
+    const host = f_HostOf(m[1]);
+    if (host && !f_AllowedHost(host, whitelist)) {
+      findings.push({ level: "error", token: "docdeps", line: ln(m.index), message: `external asset host '${host}' not in docdeps whitelist [${whitelist.join(", ")}]` });
+    }
+  }
+}
+
+function f_ScanImportmap(src: string, whitelist: string[], ln: (i: number) => number, findings: Finding[]): void {
+  const imapRe = /<script\b[^>]*type\s*=\s*["']importmap["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = imapRe.exec(src))) {
+    let map: any; try { map = JSON.parse(m[1]); } catch { continue; }
+    for (const url of Object.values(map.imports || {})) {
+      const host = f_HostOf(String(url));
+      if (host && !f_AllowedHost(host, whitelist)) {
+        findings.push({ level: "error", token: "docdeps", line: ln(m.index), message: `importmap host '${host}' not in docdeps whitelist [${whitelist.join(", ")}]` });
+      }
+    }
+  }
+}
 
 export function checkHtml(src: string, whitelist: string[]): Finding[] {
   const findings: Finding[] = [];
-  const ln = (i: number) => lineOfIdx(src, i);
+  const ln = (i: number) => f_LineOfIdx(src, i);
   let m: RegExpExecArray | null;
 
   if (whitelist.length) {
     // external URLs from src=, href=, and importmap
-    const attrRe = /<(?:script|link|img|source)\b[^>]*?\b(?:src|href)\s*=\s*["']([^"']+)["'][^>]*>/gi;
-    while ((m = attrRe.exec(src))) {
-      const host = hostOf(m[1]);
-      if (host && !allowedHost(host, whitelist)) {
-        findings.push({ level: "error", token: "docdeps", line: ln(m.index), message: `external asset host '${host}' not in docdeps whitelist [${whitelist.join(", ")}]` });
-      }
-    }
-    const imapRe = /<script\b[^>]*type\s*=\s*["']importmap["'][^>]*>([\s\S]*?)<\/script>/gi;
-    while ((m = imapRe.exec(src))) {
-      let map: any; try { map = JSON.parse(m[1]); } catch { continue; }
-      for (const url of Object.values(map.imports || {})) {
-        const host = hostOf(String(url));
-        if (host && !allowedHost(host, whitelist)) {
-          findings.push({ level: "error", token: "docdeps", line: ln(m.index), message: `importmap host '${host}' not in docdeps whitelist [${whitelist.join(", ")}]` });
-        }
-      }
-    }
+    f_ScanAttr(src, whitelist, ln, findings);
+    f_ScanImportmap(src, whitelist, ln, findings);
   }
 
   // smells: inline script (with body, not src, not importmap) and inline style
