@@ -13,6 +13,9 @@
   // per-function @docslim is ignored, so the AI can't grant itself a bigger
   // budget). Remove this line to get the strict "default" profile.
   "profile": "vibe",
+  // Optional: Global file filter globs (top-level properties)
+  "include": ["src/**"],
+  "exclude": ["vendor/**", "node_modules/**", "tests/**"],
 
   // ---- global_invariants: defaults every file inherits -----------------------
   "global_invariants": {
